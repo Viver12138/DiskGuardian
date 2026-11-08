@@ -1,0 +1,5 @@
+node_modules/
+.tmp-tests/
+*.log
+__pycache__/
+*.pyc

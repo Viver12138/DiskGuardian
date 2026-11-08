@@ -1,0 +1,25 @@
+# DiskGuardian bundle patch.
+# Declares a preset-scoped plugin row: its tools are visible only to sessions
+# that select the `diskguardian` preset, never to standard/creator sessions.
+- insert:
+    - id: preset-diskguardian
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: diskguardian
+        name: DiskGuardian
+        description: Windows 系统维护助手：磁盘分析、垃圾清理、软件审计、启动项与浏览器安全检查；只读检查先行，副作用操作需逐项授权。
+        order: 20
+        plugins:
+          # DiskGuardian host plugin: system prompt section + structured tools.
+          - id: diskguardian
+            name: '@local/dsh-diskguardian'
+
+          # Real user interaction for confirmations. DiskGuardian never treats a
+          # model-provided `approved` flag as authorization.
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: false

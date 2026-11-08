@@ -1,0 +1,26 @@
+{
+  "name": "@local/dsh-diskguardian",
+  "version": "0.9.1",
+  "private": true,
+  "description": "DiskGuardian — Windows system maintenance agent: read-only inspection first, independently enforced permissions, audited actions.",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "src/**/*.js",
+    "engine/**/*.py",
+    "cordis.patch.yml",
+    "preset/*.md",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

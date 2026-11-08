@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DiskGuardian",
+    "description": "Inspects, explains, and maintains a local Windows system: disk usage, junk files, installed software, startup items, browsers, and security status. Read-only first; consequential actions require explicit per-plan confirmation."
+  }
+}
