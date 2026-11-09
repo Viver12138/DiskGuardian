@@ -44,6 +44,38 @@ class RemovalValidationTests(unittest.TestCase):
         self.assertTrue(path.endswith("msiexec.exe"))
         self.assertTrue(any(argument.casefold().startswith("/x") for argument in arguments))
 
+    def test_msi_i_product_code_is_rewritten_to_x_and_qn(self):
+        path, arguments = removal.validate_uninstaller(
+            {"uninstall_string": r"C:\Windows\System32\msiexec.exe /I{11111111-2222-3333-4444-555555555555}"}
+        )
+        self.assertTrue(path.endswith("msiexec.exe"))
+        self.assertEqual(arguments, ["/X{11111111-2222-3333-4444-555555555555}", "/qn"])
+
+    def test_msiexec_bare_name_is_resolved_to_system32(self):
+        path, arguments = removal.validate_uninstaller(
+            {"uninstall_string": r"MsiExec.exe /I{11111111-2222-3333-4444-555555555555}"}
+        )
+        self.assertTrue(path.casefold().endswith(r"\system32\msiexec.exe"), path)
+        self.assertEqual(arguments, ["/X{11111111-2222-3333-4444-555555555555}", "/qn"])
+
+    def test_msi_i_separate_product_code_is_rewritten(self):
+        _, arguments = removal.validate_uninstaller(
+            {"uninstall_string": r"C:\Windows\System32\msiexec.exe /I {11111111-2222-3333-4444-555555555555}"}
+        )
+        self.assertEqual(arguments, ["/X{11111111-2222-3333-4444-555555555555}", "/qn"])
+
+    def test_msi_i_forces_qn_over_existing_quiet_level(self):
+        _, arguments = removal.validate_uninstaller(
+            {"uninstall_string": r"C:\Windows\System32\msiexec.exe /I{11111111-2222-3333-4444-555555555555} /qb"}
+        )
+        self.assertEqual(arguments, ["/X{11111111-2222-3333-4444-555555555555}", "/qn"])
+
+    def test_msi_i_with_package_path_is_rejected(self):
+        with self.assertRaises(EngineError):
+            removal.validate_uninstaller(
+                {"uninstall_string": r'C:\Windows\System32\msiexec.exe /I"C:\Temp\package.msi"'}
+            )
+
 
 class RemovalPlanTests(unittest.TestCase):
     def setUp(self):

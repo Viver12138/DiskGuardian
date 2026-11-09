@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Disposable MSI fixture for the P0 real-machine uninstall test.
+
+  Build with WiX 5 from this directory (app.txt is resolved relative to cwd):
+
+    wix build Product.wxs -o ../../../.tmp-tests/p0/msi/p0.msi
+
+  The resulting ARP UninstallString is the real-world `MsiExec.exe /I{GUID}`
+  form that removal.py normalizes to `/X{GUID} /qn`.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="DiskGuardian P0 MSI"
+      Manufacturer="DiskGuardian P0 Fixture"
+      Version="1.0.0"
+      ProductCode="{8B6F3A2C-7D4E-4A1B-9C2D-3E4F5A6B7C8D}"
+      UpgradeCode="6f1c2c2e-6a2f-4f7a-9d3b-2f0a1b2c3d4e"
+      Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="Main" Title="DiskGuardian P0 MSI" Level="1">
+      <ComponentGroupRef Id="MainComponents" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="DiskGuardianP0Msi" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="MainComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainFile" Guid="*">
+        <File Id="Payload" Source="app.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

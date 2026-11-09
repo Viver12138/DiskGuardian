@@ -4,8 +4,8 @@
 > 运行方式：`python -m unittest discover -s engine/tests -t engine`、`node tests/plugin.test.mjs`、`node tests/engine-client.test.mjs`
 >
 > P0 实机结果（0.9.1，2026-11-09）见 [P0_REAL_MACHINE_REPORT.md](P0_REAL_MACHINE_REPORT.md)。
-> 本文的"未验证"清单写于 0.7.0，其中真实卸载、启动项写回、锁文件、恢复冲突等已被 P0 覆盖；
-> 仍待验证的是第三方卸载器、MSI `/I`、确认卡片 UI、HKLM 启动项与重启行为。
+> 本文的"未验证"清单写于 0.7.0，其中真实卸载、启动项写回、锁文件、恢复冲突、MSI `/I` 等已被 P0 覆盖；
+> 仍待验证的是第三方卸载器、确认卡片 UI、HKLM 启动项与重启行为。
 
 ## 1. 结果
 

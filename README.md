@@ -13,7 +13,7 @@ Python 引擎判定，是否执行由你在确认卡片上决定。
 ![python](https://img.shields.io/badge/Python-3.10%2B%20stdlib-3776AB?logo=python&logoColor=white)
 ![harness](https://img.shields.io/badge/DeepSeek%20Harness-preset-4B5563)
 ![version](https://img.shields.io/badge/version-0.9.1-blue)
-![checks](https://img.shields.io/badge/checks-157%20passing-brightgreen)
+![checks](https://img.shields.io/badge/checks-162%20passing-brightgreen)
 
 > 当前版本 **0.9.1**，在 Windows 11 23H2（22631）上实测。Windows 10 未实测，见[已知限制](#已知限制)。
 
@@ -198,19 +198,20 @@ DiskGuardian/
 
 | 套件 | 数量 | 结果 |
 |---|---|---|
-| `python -m unittest discover -s engine/tests -t engine -v` | 96 | ✅ 全部通过 |
+| `python -m unittest discover -s engine/tests -t engine -v` | 101 | ✅ 全部通过 |
 | `node tests/plugin.test.mjs` | 6 | ✅ |
 | `node tests/tools.test.mjs` | 13 | ✅ |
 | `node tests/engine-client.test.mjs` | 9 | ✅ |
 | `python tools/acceptance.py` | 33 | ✅ 33/33 |
 
-共 **157 项检查**。验收脚本在 `.tmp-tests/` 沙箱内重定向 `TEMP` / `LOCALAPPDATA` / `USERPROFILE`，
+共 **162 项检查**。验收脚本在 `.tmp-tests/` 沙箱内重定向 `TEMP` / `LOCALAPPDATA` / `USERPROFILE`，
 使用真实引擎与真实 JSONL 协议，不会触碰用户文件或数据库。
 
 P0 实机检查（真实 HKCU 卸载项、真实锁文件、真实隔离区；会写 HKCU 测试项，需 `--yes`）：
 
 ```powershell
 python tools/p0_real_machine.py --yes --keep
+# 额外跑真实 MSI 卸载：--msi-fixture .tmp-tests\p0\msi\p0.msi
 ```
 
 结果与未闭环项见 [docs/P0_REAL_MACHINE_REPORT.md](docs/P0_REAL_MACHINE_REPORT.md)。
@@ -228,8 +229,8 @@ python tools/acceptance.py
 - **Windows 10 未实测**；代码按能力检测而非版本号分支。
 - **真实第三方软件卸载未在本机执行**：P0 用受控测试卸载器验证了真实进程、注册表与验证链路；
   第三方卸载器的 GUI/UAC/延迟退出仍需在 VM 用可弃用软件验证。
-- **MSI `MsiExec.exe /I{GUID}` 形式的卸载项会被拒绝**（P0 发现）：引擎目前只接受 `/X` 或
-  `/uninstall`；真实 MSI 手动 `/X /qn` 可以卸载。修或不修见 [P0 报告](docs/P0_REAL_MACHINE_REPORT.md)。
+- **MSI `/I{GUID}` 已支持**（P0）：裸 `MsiExec.exe` 会解析到 `System32`，`/I{GUID}` 归一化为
+  `/X{GUID} /qn`；真实 MSI 已由引擎卸载并验证。`/I<路径>.msi` 等安装形式仍拒绝，不会被误当卸载。
 - **确认卡片的真实 UI 尚未点验**：无确认服务时已用测试证明 fail-closed（不签发批准、不执行）；
   批准/拒绝/超时仍建议在 DiskGuardian 预设会话里手工走一次。
 - **浏览器扩展与设置变更未实现**（刻意）：改写 `Preferences` 风险高，请用浏览器自身管理。
@@ -270,7 +271,7 @@ allowed*: path rules, L0–L4 risk classes, durable plans, one-time approvals bo
 target hashes, quarantine-first cleanup, verification, and audit logging. There is no arbitrary
 command tool, no PowerShell passthrough, and no self-elevation.
 
-- **28 structured tools**, **30 engine operations**, **157 passing checks** (v0.9.1).
+- **28 structured tools**, **30 engine operations**, **162 passing checks** (v0.9.1).
 - Cleanup is reversible: files move to a quarantine, and only an explicit `purge_quarantine`
   deletes them permanently after hash verification.
 - Read-only inspection needs no administrator rights; operations that require elevation fail

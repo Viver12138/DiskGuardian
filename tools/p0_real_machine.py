@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P0 real-machine checks for DiskGuardian (Windows only).
+r"""P0 real-machine checks for DiskGuardian (Windows only).
 
 What is real here:
 - a real uninstaller process is spawned from a real HKCU uninstall registry
@@ -28,6 +28,7 @@ Safety:
 Usage:
     python tools/p0_real_machine.py --yes
     python tools/p0_real_machine.py --yes --keep
+    python tools/p0_real_machine.py --yes --msi-fixture .tmp-tests\p0\msi\p0.msi
 """
 
 from __future__ import annotations
@@ -263,6 +264,62 @@ def quarantine_cleanup(engine: Engine, quarantine_id: str) -> None:
         pass
 
 
+def find_msi_entry(display_name: str):
+    """Find an ARP entry in HKCU/HKLM, 32/64-bit views."""
+    for root, hive in ((winreg.HKEY_CURRENT_USER, "HKCU"), (winreg.HKEY_LOCAL_MACHINE, "HKLM")):
+        for view, view_name in ((0, "default"), (winreg.KEY_WOW64_32KEY, "32"), (winreg.KEY_WOW64_64KEY, "64")):
+            path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+            try:
+                with winreg.OpenKey(root, path, 0, winreg.KEY_READ | view) as key:
+                    count = winreg.QueryInfoKey(key)[0]
+                    for index in range(count):
+                        try:
+                            subkey = winreg.EnumKey(key, index)
+                            with winreg.OpenKey(key, subkey) as child:
+                                name, _ = winreg.QueryValueEx(child, "DisplayName")
+                                if str(name).casefold() != display_name.casefold():
+                                    continue
+
+                                def value(field: str):
+                                    try:
+                                        return winreg.QueryValueEx(child, field)[0]
+                                    except OSError:
+                                        return None
+
+                                return {
+                                    "hive": hive,
+                                    "view": view_name,
+                                    "subkey": subkey,
+                                    "display_name": name,
+                                    "uninstall": value("UninstallString"),
+                                    "quiet": value("QuietUninstallString"),
+                                    "install_location": value("InstallLocation"),
+                                }
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    return None
+
+
+def wait_for_msi_entry(display_name: str, timeout: float = 30.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        entry = find_msi_entry(display_name)
+        if entry is not None:
+            return entry
+        time.sleep(0.5)
+    return None
+
+
+def uninstall_msi(entry: dict) -> None:
+    subprocess.run(
+        ["msiexec.exe", "/x", str(entry["subkey"]), "/qn"],
+        capture_output=True,
+        timeout=180,
+    )
+
+
 def compile_fixtures() -> dict[str, Path]:
     csc = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe"
     if not csc.is_file():
@@ -385,11 +442,10 @@ def scenario_removal_elevation(engine: Engine, fixtures: dict[str, Path]):
 
 
 def scenario_removal_msi_i_string(engine: Engine):
-    """The WiX MSI fixture registers `MsiExec.exe /I{GUID}` as UninstallString.
+    """A bare `MsiExec.exe /I{GUID}` ARP entry must be resolved and rewritten.
 
-    That is a real Windows Installer pattern, but this engine only accepts /X or
-    /uninstall for msiexec. The test records the compatibility gap rather than
-    pretending the MSI path works.
+    The fixture is only registered; nothing is executed. This covers the two
+    gaps found by the earlier P0 run: relative MsiExec.exe and the /I form.
     """
     key_name = "DiskGuardianP0MsiI"
     display = "DiskGuardian P0 MSI I-String"
@@ -397,20 +453,69 @@ def scenario_removal_msi_i_string(engine: Engine):
         write_arp(
             key_name,
             display,
-            Path(r"C:\Windows\System32\msiexec.exe"),
+            Path("MsiExec.exe"),
             TEST_APP_DIR,
             arguments="/I{00000000-0000-0000-0000-000000000000}",
         )
-        try:
-            engine.call("create_removal_plan", {"software": [display]})
-            REC.check("MSI /I string rejected", False, "plan unexpectedly created")
-        except EngineFailure as error:
-            REC.check("MSI /I is E_PLAN_EMPTY", error.code == "E_PLAN_EMPTY", error.code)
-            excluded = (error.details or {}).get("excluded") or []
-            reason = " ".join(str(item.get("reason") or "") for item in excluded).lower()
-            REC.check("exclusion explains the /X requirement", "msiexec" in reason and "/x" in reason, reason[:300])
+        plan = engine.call("create_removal_plan", {"software": [display]})
+        REC.check("MSI /I plan created", plan["plan_type"] == "removal", plan["plan_type"])
+        item = plan["items"][0] if plan.get("items") else {}
+        arguments = [str(argument) for argument in item.get("arguments") or []]
+        REC.check("planner rewrote /I to /X", any(argument.casefold().startswith("/x") for argument in arguments), str(arguments))
+        REC.check("planner added /qn", any(argument.casefold() == "/qn" for argument in arguments), str(arguments))
+        REC.check(
+            "bare MsiExec.exe resolved to System32",
+            str(item.get("uninstaller") or "").casefold().endswith("\\system32\\msiexec.exe"),
+            str(item.get("uninstaller")),
+        )
     finally:
         delete_arp(key_name)
+
+
+def scenario_removal_msi_real(engine: Engine, msi_path: Path, display: str):
+    """Install a real MSI fixture, let the engine uninstall it, verify the ARP entry.
+
+    The fixture is built with WiX 5 and its ARP UninstallString is
+    `MsiExec.exe /I{GUID}`; this is the case the rewrite in removal.py targets.
+    The script refuses to touch the fixture if it is already installed.
+    """
+    msi_path = Path(msi_path)
+    if not msi_path.is_file():
+        return f"MSI fixture not found: {msi_path}"
+    if find_msi_entry(display) is not None:
+        return f"{display} is already installed; refusing to uninstall it"
+
+    completed = subprocess.run(
+        ["msiexec.exe", "/i", str(msi_path), "/qn"],
+        capture_output=True,
+        timeout=180,
+    )
+    entry = wait_for_msi_entry(display)
+    if entry is None:
+        REC.check("MSI fixture installed", False, f"msiexec exit {completed.returncode}")
+        return
+    REC.check("MSI fixture installed", True, f"msiexec exit {completed.returncode}")
+    install_dir = Path(entry.get("install_location") or (REAL_LOCALAPPDATA / "DiskGuardianP0Msi"))
+    try:
+        command = str(entry.get("uninstall") or "")
+        REC.check("fixture ARP uses /I", "/i" in command.casefold(), command)
+        plan = engine.call("create_removal_plan", {"software": [display]})
+        item = plan["items"][0] if plan.get("items") else {}
+        arguments = [str(argument) for argument in item.get("arguments") or []]
+        REC.check("planner rewrote /I to /X", any(argument.casefold().startswith("/x") for argument in arguments), str(arguments))
+        REC.check("planner added /qn", any(argument.casefold() == "/qn" for argument in arguments), str(arguments))
+
+        approval = engine.call("issue_approval", {"plan_id": plan["plan_id"]})
+        result = engine.call("execute_removal_plan", {"plan_id": plan["plan_id"], "approval_id": approval["approval_id"]})
+        REC.check("execute success", result["success"] is True, json.dumps(result, ensure_ascii=False)[:500])
+        REC.check("ARP entry gone", find_msi_entry(display) is None)
+        REC.check("install directory removed", not install_dir.exists(), str(install_dir))
+    finally:
+        remaining = find_msi_entry(display)
+        if remaining is not None:
+            uninstall_msi(remaining)
+        if install_dir.exists():
+            shutil.rmtree(install_dir, ignore_errors=True)
 
 
 def scenario_startup_disable_enable(engine: Engine):
@@ -663,6 +768,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="DiskGuardian P0 real-machine checks (Windows)")
     parser.add_argument("--yes", action="store_true", help="required: allow real HKCU writes and fixture uninstallers")
     parser.add_argument("--keep", action="store_true", help="keep the .tmp-tests/p0-* sandbox")
+    parser.add_argument("--msi-fixture", type=Path, help="optional MSI package for the real MSI uninstall scenario")
+    parser.add_argument("--msi-display-name", default="DiskGuardian P0 MSI", help="DisplayName of the MSI fixture")
     args = parser.parse_args()
     if not args.yes:
         print("Refusing to run: this writes HKCU test keys. Pass --yes after reviewing the script.")
@@ -696,6 +803,8 @@ def main() -> int:
         run("removal-exe-success", scenario_removal_success, engine, fixtures)
         run("removal-elevation", scenario_removal_elevation, engine, fixtures)
         run("removal-msi-i-string", scenario_removal_msi_i_string, engine)
+        if args.msi_fixture:
+            run("removal-msi-real", scenario_removal_msi_real, engine, args.msi_fixture, args.msi_display_name)
         run("startup-hkcu-disable-enable", scenario_startup_disable_enable, engine)
         run("startup-value-drift", scenario_startup_drift, engine)
         run("cleanup-locked-partial", scenario_cleanup_locked_partial, engine, temp)

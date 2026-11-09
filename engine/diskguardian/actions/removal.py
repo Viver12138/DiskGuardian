@@ -4,7 +4,8 @@ Safety rules enforced here:
 - only the software's own uninstall command from the registry is used;
 - the executable must be a local .exe outside temp/download directories, and
   never a command interpreter;
-- MSI removal must carry an explicit /X or /uninstall argument;
+- MSI removal must carry an explicit /X or /uninstall argument; a maintenance
+  `/I{ProductCode}` entry is normalized to `/X{ProductCode} /qn`;
 - no elevation is attempted: a 740/access-denied result is reported, not retried;
 - execution needs a one-time engine approval bound to the plan.
 """
@@ -15,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+import uuid
 import winreg
 from pathlib import Path
 from typing import Any, Callable
@@ -124,6 +126,53 @@ def find_software(name: str, *, publisher: str | None = None, version: str | Non
     return matches[0]
 
 
+def _msiexec_product_code(value: str) -> str | None:
+    """Return `{GUID}` when the argument is a braced MSI product code."""
+    text = value.strip()
+    if len(text) < 2 or not text.startswith("{") or not text.endswith("}"):
+        return None
+    try:
+        uuid.UUID(text[1:-1])
+    except (ValueError, AttributeError):
+        return None
+    return text
+
+
+def _normalize_msiexec_arguments(arguments: list[str]) -> list[str]:
+    """Rewrite `msiexec /I{ProductCode}` maintenance commands to a real uninstall.
+
+    Some MSIs, notably per-user packages, register their ARP UninstallString as
+    `MsiExec.exe /I{GUID}`. `/I` opens maintenance mode; `/X` is the actual
+    uninstall. The rewrite keeps the vendor product code, preserves every other
+    flag, and forces exactly one `/qn` so the headless tool never stops on a
+    maintenance dialog.
+    """
+    normalized = list(arguments)
+    changed = False
+    index = 0
+    while index < len(normalized):
+        argument = normalized[index]
+        lowered = argument.casefold()
+        if lowered.startswith(("/i", "-i")) and len(argument) > 2:
+            code = _msiexec_product_code(argument[2:])
+            if code is not None:
+                normalized[index] = "/X" + code
+                changed = True
+        elif lowered in {"/i", "-i"} and index + 1 < len(normalized):
+            code = _msiexec_product_code(normalized[index + 1])
+            if code is not None:
+                normalized[index] = "/X" + code
+                del normalized[index + 1]
+                changed = True
+        index += 1
+    if changed:
+        # The tool is headless: force exactly one silent switch. An MSI that
+        # registered `/I{GUID} /qb` would otherwise show a progress UI.
+        normalized = [item for item in normalized if not item.casefold().startswith(("/q", "-q"))]
+        normalized.append("/qn")
+    return normalized
+
+
 def validate_uninstaller(entry: dict[str, Any]) -> tuple[str, list[str]]:
     command = entry.get("quiet_uninstall_string") or entry.get("uninstall_string")
     if not command:
@@ -132,6 +181,14 @@ def validate_uninstaller(entry: dict[str, Any]) -> tuple[str, list[str]]:
     if not executable:
         raise EngineError(E_INVALID_PARAMS, "the uninstall command has no executable")
     path = Path(executable)
+    basename = path.name.casefold()
+    if basename == "msiexec.exe" and not path.is_absolute():
+        # ARP entries commonly register the bare name "MsiExec.exe". Resolve it
+        # to the system copy instead of trusting PATH or the working directory.
+        system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        candidate = Path(system_root) / "System32" / "msiexec.exe"
+        if candidate.is_file():
+            path = candidate
     if not path.is_absolute() or not path.is_file():
         raise EngineError(E_INVALID_PARAMS, f"the uninstall executable is missing: {executable}")
     basename = path.name.casefold()
@@ -141,7 +198,15 @@ def validate_uninstaller(entry: dict[str, Any]) -> tuple[str, list[str]]:
     if any(marker in lowered for marker in _UNSAFE_MARKERS):
         raise EngineError(E_INVALID_PARAMS, "refusing to run an uninstaller from a temporary or download directory")
     if basename == "msiexec.exe":
-        if not any(argument.casefold().startswith(("/x", "-x", "/uninstall")) for argument in arguments):
+        has_remove = any(
+            argument.casefold().startswith(("/x", "-x", "/uninstall")) for argument in arguments
+        )
+        if not has_remove:
+            arguments = _normalize_msiexec_arguments(arguments)
+            has_remove = any(
+                argument.casefold().startswith(("/x", "-x", "/uninstall")) for argument in arguments
+            )
+        if not has_remove:
             raise EngineError(E_INVALID_PARAMS, "msiexec removal must carry /X or /uninstall")
     return str(path), arguments
 
