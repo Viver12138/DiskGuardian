@@ -6,21 +6,24 @@ import test from 'node:test'
  * each registration function directly with a fake client and a fake Host
  * context. That keeps the confirmation logic under test without a live Host.
  */
-async function registered(decide, responses) {
+async function registered(decide, responses, options = {}) {
   const calls = []
   const tools = new Map()
+  const withQuestions = options.withQuestions !== false
   const ctx = {
     effect: (factory) => factory(),
     get: (name) =>
       name === 'userQuestions'
-        ? {
-            async ask(request) {
-              const question = request.questions[0]
-              const selected = decide(question)
-              if (selected instanceof Error) throw selected
-              return { answers: [{ id: question.id, selected: Array.isArray(selected) ? selected : [selected] }] }
-            },
-          }
+        ? withQuestions
+          ? {
+              async ask(request) {
+                const question = request.questions[0]
+                const selected = decide(question)
+                if (selected instanceof Error) throw selected
+                return { answers: [{ id: question.id, selected: Array.isArray(selected) ? selected : [selected] }] }
+              },
+            }
+          : undefined
         : undefined,
     tools: {
       register(definition) {
@@ -99,6 +102,46 @@ test('a confirmation service error is reported as declined, not as success', asy
   const result = await tools.get('execute_cleanup_plan').execute({ plan_id: 'plan_cleanup' }, {})
   assert.equal(result.declined, true)
   assert.match(result.reason, /confirmation was not obtained/)
+})
+
+test('without a confirmation service nothing executes', async () => {
+  const { tools, calls } = await registered(
+    () => '确认执行',
+    { preview_action_plan: PENDING_CLEANUP_PLAN },
+    { withQuestions: false },
+  )
+  await assert.rejects(
+    () => tools.get('execute_cleanup_plan').execute({ plan_id: 'plan_cleanup' }, {}),
+    (error) => error.code === 'E_CONFIRMATION_UNAVAILABLE',
+  )
+  assert.deepEqual(
+    calls.map((call) => call.operation),
+    ['preview_action_plan'],
+  )
+})
+
+test('without a confirmation service removal also stays inert', async () => {
+  const { tools, calls } = await registered(
+    () => '确认执行',
+    {
+      preview_action_plan: {
+        plan_id: 'plan_removal',
+        plan_type: 'removal',
+        status: 'pending',
+        expired: false,
+        items: [{ software: 'Example' }],
+      },
+    },
+    { withQuestions: false },
+  )
+  await assert.rejects(
+    () => tools.get('execute_removal_plan').execute({ plan_id: 'plan_removal' }, {}),
+    (error) => error.code === 'E_CONFIRMATION_UNAVAILABLE',
+  )
+  assert.deepEqual(
+    calls.map((call) => call.operation),
+    ['preview_action_plan'],
+  )
 })
 
 test('a removal plan cannot be executed as a cleanup plan', async () => {
